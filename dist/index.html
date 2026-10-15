@@ -114,6 +114,15 @@
       #product-modal .modal-close svg { fill:none; stroke:var(--ink); stroke-width:2; }
       @media (max-width:760px){ #product-modal .detail-main{padding-top:92px}#product-modal .modal-close{top:74px} }
       @media (prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+      /* QA hardening: accessible product triggers, contrast and narrow-screen resilience. */
+      button.product-photo { width:100%; border:0; padding:0; appearance:none; font:inherit; color:inherit; text-align:inherit; }
+      .product-photo:focus-visible { outline:3px solid #3f7410; outline-offset:-3px; }
+      .badge { color:#426f0b; }
+      .discount,.stock { color:#3f7410; }
+      .stock:before { background:#5b9417; }
+      @media (min-width:761px) and (max-width:960px){ .utility{display:none}.header-in{min-height:62px;gap:12px}.nav-holder,.search-shell,.actions .account{display:none}.actions{justify-self:end}.icon-btn{width:40px;height:40px;flex:0 0 40px} }
+      @media (max-width:760px){ .nav-holder{display:none}.actions{justify-self:end}.small-icon,.icon-btn{width:40px;height:40px}.icon-btn{flex:0 0 40px}.card-foot .btn{height:42px} }
+      @media (max-width:390px){ .catalog-top{flex-wrap:wrap;align-items:flex-start}.catalog-top>div{width:100%;justify-content:space-between}.catalog-top select{min-width:0;width:auto;flex:1} }
     </style>
   </head>
   <body>
@@ -193,6 +202,166 @@
       const closeMobileFilters=({restoreFocus=true}={})=>{filterPanel.classList.remove('open');pageOverlay.classList.remove('open');mobileFilterButton.setAttribute('aria-expanded','false');document.body.style.overflow='';if(restoreFocus&&matchMedia('(max-width:760px)').matches)mobileFilterButton.focus()};
       const openMobileFilters=()=>{filterPanel.classList.add('open');pageOverlay.classList.add('open');mobileFilterButton.setAttribute('aria-expanded','true');document.body.style.overflow='hidden';mobileFilterClose.focus()};
       mobileFilterButton.onclick=()=>filterPanel.classList.contains('open')?closeMobileFilters():openMobileFilters();mobileFilterClose.onclick=closeMobileFilters;pageOverlay.addEventListener('click',closeMobileFilters);document.addEventListener('keydown',e=>{if(e.key==='Escape'&&filterPanel.classList.contains('open'))closeMobileFilters()});
+    </script>
+    <script>
+      (()=>{
+        const productModal=document.getElementById('product-modal');
+        const originalRenderHome=renderHome;
+        const originalCloseLayers=closeLayers;
+        const originalOpenDetail=openDetail;
+        const originalShowView=showView;
+        let favoritesOnly=false;
+        let detailOrigin=null;
+        let preservingFavoritesView=false;
+
+        document.querySelectorAll('.condition-filter').forEach(input=>{
+          input.value=input.parentElement.textContent.trim();
+        });
+
+        const syncScrollLock=()=>{
+          const anotherLayerIsOpen=['overlay','cart','compare','finder','mobile-menu'].some(id=>document.getElementById(id).classList.contains('open'))||document.querySelector('.filters')?.classList.contains('open');
+          document.body.style.overflow=anotherLayerIsOpen?'hidden':'';
+        };
+        const closeProductDetail=({restoreFocus=true}={})=>{
+          const wasOpen=productModal.classList.contains('open');
+          productModal.classList.remove('open');
+          productModal.setAttribute('aria-hidden','true');
+          syncScrollLock();
+          if(wasOpen&&restoreFocus&&detailOrigin?.isConnected)detailOrigin.focus();
+          detailOrigin=null;
+        };
+        const makeProductTriggersAccessible=()=>{
+          document.querySelectorAll('.product-photo[data-detail]').forEach(photo=>{
+            let trigger=photo;
+            if(photo.tagName!=='BUTTON'){
+              trigger=document.createElement('button');
+              trigger.type='button';
+              trigger.className=photo.className;
+              trigger.dataset.detail=photo.dataset.detail;
+              trigger.style.cssText=photo.style.cssText;
+              trigger.innerHTML=photo.innerHTML;
+              photo.replaceWith(trigger);
+            }
+            const name=trigger.closest('.product-card')?.querySelector('h3')?.textContent?.trim()||'produkt';
+            trigger.setAttribute('aria-label',`Zobrazit detail: ${name}`);
+            trigger.onclick=()=>openDetail(trigger.dataset.detail);
+          });
+        };
+
+        renderHome=function(){
+          originalRenderHome();
+          makeProductTriggersAccessible();
+        };
+        renderCatalog=function(){
+          const f=activeFilters();
+          const stockOnly=document.getElementById('in-stock').checked;
+          let list=products.filter(p=>(!f.mods.length||f.mods.includes(p.model))&&(!f.cons.length||f.cons.includes(p.condition))&&p.price>=f.min&&p.price<=f.max&&(!f.color||p.color===f.color)&&(!stockOnly||/^Skladem\b/i.test(p.stock))&&(!favoritesOnly||favorites.has(p.id)));
+          const sort=document.getElementById('sort').value;
+          if(sort==='low')list.sort((a,b)=>a.price-b.price);
+          if(sort==='high')list.sort((a,b)=>b.price-a.price);
+          if(sort==='popular')list.sort((a,b)=>+b.rating.replace(',','.')-+a.rating.replace(',','.'));
+          const resultWord=list.length===1?'výsledek':list.length>1&&list.length<5?'výsledky':'výsledků';
+          document.getElementById('product-count').textContent=`${list.length} ${resultWord} z ukázkového výběru`;
+          document.getElementById('catalog-products').innerHTML=list.length?list.map(productCard).join(''):'<p style="grid-column:1/-1;color:var(--muted);padding:35px 0">Tomuto výběru nic neodpovídá. Zkuste upravit filtry.</p>';
+          const chips=[];
+          f.mods.forEach(x=>chips.push(['Model: iPhone '+x,'model',x]));
+          f.cons.forEach(x=>chips.push([x,'condition',x]));
+          if(f.min)chips.push(['Od '+money(f.min),'min','']);
+          if(f.max<Infinity)chips.push(['Do '+money(f.max),'max','']);
+          if(f.color)chips.push([f.color,'color','']);
+          if(stockOnly)chips.push(['Pouze skladem','stock','']);
+          if(favoritesOnly)chips.push(['Oblíbené','favorites','']);
+          document.getElementById('filter-chips').innerHTML=chips.map(([label,type,value])=>`<span class="chip">${label}<button data-remove="${type}" data-value="${value}" aria-label="Odebrat filtr">×</button></span>`).join('');
+          document.querySelectorAll('[data-remove]').forEach(button=>button.onclick=()=>removeFilter(button.dataset.remove,button.dataset.value));
+          bindCards();
+          makeProductTriggersAccessible();
+        };
+        removeFilter=function(type,value){
+          if(type==='model')document.querySelectorAll('.model-filter').forEach(input=>{if(input.value===value)input.checked=false});
+          if(type==='condition')document.querySelectorAll('.condition-filter').forEach(input=>{if(input.value===value)input.checked=false});
+          if(type==='min')document.getElementById('min-price').value='';
+          if(type==='max')document.getElementById('max-price').value='';
+          if(type==='color'){selectedColor='';document.querySelectorAll('.dot').forEach(dot=>dot.classList.remove('selected'))}
+          if(type==='stock')document.getElementById('in-stock').checked=false;
+          if(type==='favorites')favoritesOnly=false;
+          renderCatalog();
+        };
+        showView=function(view){
+          if(view==='iphone'&&!preservingFavoritesView)favoritesOnly=false;
+          originalShowView(view);
+        };
+        closeLayers=function(){
+          originalCloseLayers();
+          closeProductDetail({restoreFocus:false});
+        };
+        openDetail=function(id){
+          detailOrigin=document.activeElement instanceof HTMLElement?document.activeElement:null;
+          originalOpenDetail(id);
+          productModal.removeAttribute('aria-modal');
+          productModal.setAttribute('aria-hidden','false');
+          const title=productModal.querySelector('.detail-info h2');
+          if(title){title.id='detail-title';productModal.setAttribute('aria-labelledby','detail-title')}
+          const conditionsButton=[...productModal.querySelectorAll('.option-row button')].find(button=>button.textContent.trim()==='Vysvětlení stavů');
+          if(conditionsButton){conditionsButton.removeAttribute('onclick');conditionsButton.onclick=showConditions}
+          document.getElementById('product-close').onclick=()=>closeProductDetail();
+          document.getElementById('detail-add').onclick=()=>{addCart(id);closeProductDetail()};
+          requestAnimationFrame(()=>document.getElementById('product-close').focus());
+        };
+        function showConditions(){
+          closeProductDetail({restoreFocus:false});
+          showView('home');
+          requestAnimationFrame(()=>document.getElementById('condition').scrollIntoView({behavior:'smooth',block:'start'}));
+        }
+        function showFavorites(){
+          favoritesOnly=true;
+          preservingFavoritesView=true;
+          showView('iphone');
+          preservingFavoritesView=false;
+          renderCatalog();
+          document.querySelector('.category-hero').scrollIntoView({behavior:'smooth',block:'start'});
+        }
+
+        document.querySelectorAll('.model-filter,.condition-filter').forEach(input=>input.onchange=renderCatalog);
+        document.getElementById('min-price').oninput=renderCatalog;
+        document.getElementById('max-price').oninput=renderCatalog;
+        document.getElementById('in-stock').onchange=renderCatalog;
+        document.getElementById('sort').onchange=renderCatalog;
+        document.querySelectorAll('.dot').forEach(dot=>dot.onclick=()=>{
+          selectedColor=selectedColor===dot.dataset.color?'':dot.dataset.color;
+          document.querySelectorAll('.dot').forEach(item=>item.classList.toggle('selected',item===dot&&selectedColor));
+          renderCatalog();
+        });
+        document.getElementById('clear-filters').onclick=()=>{
+          document.querySelectorAll('.model-filter,.condition-filter,#in-stock').forEach(input=>input.checked=false);
+          document.getElementById('min-price').value='';
+          document.getElementById('max-price').value='';
+          selectedColor='';
+          favoritesOnly=false;
+          document.querySelectorAll('.dot').forEach(dot=>dot.classList.remove('selected'));
+          renderCatalog();
+        };
+        document.getElementById('header-favorites').onclick=showFavorites;
+        document.querySelectorAll('[data-close-layers],[data-close-menu]').forEach(button=>button.onclick=closeLayers);
+        document.getElementById('overlay').onclick=closeLayers;
+        document.getElementById('mobile-close').onclick=closeLayers;
+        document.querySelectorAll('header a[href^="#"]').forEach(link=>link.addEventListener('click',()=>closeProductDetail({restoreFocus:false})));
+        const cartButton=document.getElementById('cart-button');
+        const openCart=cartButton.onclick;
+        cartButton.onclick=()=>{closeProductDetail({restoreFocus:false});openCart()};
+        const menuButton=document.getElementById('menu-button');
+        const openMenu=menuButton.onclick;
+        menuButton.onclick=()=>{closeProductDetail({restoreFocus:false});openMenu();syncScrollLock()};
+        productModal.removeAttribute('aria-modal');
+        productModal.setAttribute('aria-hidden','true');
+        document.addEventListener('keydown',event=>{
+          if(event.key==='Escape'&&productModal.classList.contains('open')){
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            closeProductDetail();
+          }
+        },true);
+        renderAll();
+      })();
     </script>
   </body>
 </html>
